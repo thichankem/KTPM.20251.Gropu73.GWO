@@ -1,0 +1,61 @@
+MÔ TẢ BÀI TOÁN LẬP LỊCH SẢN XUẤT
+
+
+Bài toán yêu cầu phân công 5 công việc cho 3 máy sao cho tối ưu đồng thời hai mục tiêu: tổng thời gian hoàn thành và tổng chi phí sản xuất.
+
+
+
+Dữ liệu đầu vào:
+
+Mỗi công việc có thời gian xử lý khác nhau trên từng máy.
+
+Mỗi công việc có chi phí xử lý khác nhau trên từng máy.
+
+
+Biến quyết định:
+
+Một lời giải là một chuỗi gồm 5 số nguyên, mỗi số đại diện cho máy được gán cho công việc tương ứng.
+
+Ví dụ: chuỗi [2, 1, 0, 2, 1] nghĩa là:
+
+Công việc 1 được gán cho máy 2
+
+Công việc 2 được gán cho máy 1
+
+Công việc 3 được gán cho máy 0
+
+Công việc 4 được gán cho máy 2
+
+Công việc 5 được gán cho máy 1
+
+
+
+Mục tiêu tối ưu:
+
+
+Tổng thời gian hoàn thành (makespan):
+
+Là thời gian dài nhất mà một máy phải làm việc để xử lý các công việc được gán cho nó.
+
+
+Tổng chi phí sản xuất:
+
+Là tổng chi phí xử lý của tất cả công việc trên các máy được gán.
+
+
+Thuật toán sử dụng:
+
+Thuật toán MOGWO (Multi-Objective Grey Wolf Optimizer) mô phỏng hành vi săn mồi của sói xám trong tự nhiên.
+
+Ba con sói đầu đàn (alpha, beta, delta) dẫn dắt quần thể cập nhật vị trí.
+
+Các lời giải không trội được lưu vào một kho lưu trữ gọi là archive.
+
+Khi archive đầy, thuật toán sử dụng cơ chế lưới và khoảng cách đám đông để duy trì đa dạng lời giải.
+
+
+Kết quả đầu ra:
+
+Một tập hợp các lời giải Pareto tối ưu, nghĩa là không thể cải thiện một mục tiêu mà không làm xấu đi mục tiêu còn lại.
+
+Người dùng có thể lựa chọn lời giải phù hợp nhất tùy theo ưu tiên: giảm thời gian hay giảm chi phí.
