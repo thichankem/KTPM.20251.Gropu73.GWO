@@ -1,0 +1,33 @@
+Giải thích kết quả biểu đồ Pareto Front – Lập lịch sản xuất đa mục tiêu bằng MOGWO
+
+
+
+Biểu đồ Pareto Front thể hiện sự đánh đổi giữa hai mục tiêu trong bài toán lập lịch sản xuất: tổng thời gian hoàn thành (makespan) và tổng chi phí sản xuất.
+
+
+
+Trục ngang (X) biểu diễn tổng thời gian hoàn thành – tức là thời gian dài nhất mà một máy phải làm việc để xử lý các công việc được gán cho nó. Trục dọc (Y) biểu diễn tổng chi phí sản xuất – là tổng chi phí xử lý của tất cả công việc trên các máy được gán.
+
+
+
+Các điểm trên biểu đồ là các lời giải không trội (Pareto-optimal), nghĩa là không thể cải thiện một mục tiêu mà không làm xấu đi mục tiêu còn lại. Cụ thể:
+
+Điểm (13, 415): có thời gian hoàn thành thấp nhất, nhưng chi phí cao nhất.
+
+Điểm (14, 400): là lời giải cân bằng giữa thời gian và chi phí.
+
+Điểm (20, 390): có chi phí thấp nhất, nhưng thời gian hoàn thành cao nhất.
+
+
+
+Người dùng có thể lựa chọn lời giải phù hợp nhất tùy theo ưu tiên:
+
+Nếu cần hoàn thành nhanh, chọn lời giải có makespan thấp.
+
+Nếu cần tiết kiệm chi phí, chọn lời giải có tổng chi phí thấp.
+
+Nếu cần cân bằng cả hai, chọn lời giải nằm giữa các điểm cực.
+
+
+
+Biểu đồ này giúp trực quan hóa hiệu quả của thuật toán MOGWO trong việc tìm ra tập hợp các lời giải tối ưu đa mục tiêu cho bài toán lập lịch sản xuất.
