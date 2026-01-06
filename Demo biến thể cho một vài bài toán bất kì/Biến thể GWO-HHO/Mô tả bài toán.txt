@@ -1,0 +1,1 @@
+Bài toán được xét là bài toán tối ưu một biến đơn giản, trong đó mục tiêu là tìm giá trị nhỏ nhất của hàm f(x)=x^2 với x thuộc từ -10 đến 10
