@@ -1,0 +1,208 @@
+clc; clear; close all;
+
+%% ================= BASIC PARAMETERS =================
+Thickness = 0.05;
+Pt = 10^(20/10);
+Sigma2 = 10^(-110/10);
+c = 3e8;
+f0 = 28e9;
+lambda = c/f0;
+
+PL = -20*log10(4*pi/lambda)-35*log10(250);
+pathloss = 10^(PL/10);
+
+%% SIM parameters
+M = 30; N = 30;
+S = 4;
+K = 3;
+d_element_spacing = lambda/2;
+
+L_list = 1:5;              % ===== SWEEP TX-SIM layers =====
+MonteCarlo = 5;
+MaxIter = 30;
+SearchAgents = 15;
+
+NMSE_L = zeros(length(L_list),1);
+Cap_L  = zeros(length(L_list),1);
+
+%% ================= LOOP OVER TX-SIM LAYERS =================
+for idxL = 1:length(L_list)
+
+    L = L_list(idxL);
+    disp(['Running L = ',num2str(L)])
+
+    %% ================= BUILD SIM MATRICES =================
+    k = 2*pi/lambda;
+    posM = ((0:M-1)-(M-1)/2)*d_element_spacing;
+    posN = ((0:N-1)-(N-1)/2)*d_element_spacing;
+    posS = ((0:S-1)-(S-1)/2)*d_element_spacing;
+
+    d_layer_T = Thickness/L;
+    d_layer_R = Thickness/K;
+
+    % TX-SIM internal
+    W_T = zeros(M,M);
+    for m=1:M
+        for n=1:M
+            r = sqrt((posM(m)-posM(n))^2 + d_layer_T^2);
+            W_T(m,n)=exp(-1i*k*r)/r;
+        end
+    end
+    W_T=W_T/norm(W_T,'fro');
+
+    % RX-SIM internal
+    U_R = zeros(N,N);
+    for m=1:N
+        for n=1:N
+            r = sqrt((posN(m)-posN(n))^2 + d_layer_R^2);
+            U_R(m,n)=exp(-1i*k*r)/r;
+        end
+    end
+    U_R=U_R/norm(U_R,'fro');
+
+    % TX → SIM
+    W_T_1=zeros(M,S);
+    for m=1:M
+        for s=1:S
+            r=sqrt((posM(m)-posS(s))^2+d_layer_T^2);
+            W_T_1(m,s)=exp(-1i*k*r)/r;
+        end
+    end
+    W_T_1=W_T_1/norm(W_T_1,'fro');
+
+    % SIM → RX
+    U_R_1=zeros(S,N);
+    for s=1:S
+        for n=1:N
+            r=sqrt((posS(s)-posN(n))^2+d_layer_R^2);
+            U_R_1(s,n)=exp(-1i*k*r)/r;
+        end
+    end
+    U_R_1=U_R_1/norm(U_R_1,'fro');
+
+    NMSE_mc=zeros(MonteCarlo,1);
+    Cap_mc=zeros(MonteCarlo,1);
+
+    %% ================= MONTE CARLO =================
+    for mc=1:MonteCarlo
+
+        % True channel
+        G=(randn(N,M)+1i*randn(N,M))/sqrt(2);
+        G=sqrt(pathloss)*G;
+        [~,Svd,~]=svd(G);
+        H_true=Svd(1:S,1:S);
+        h_true=H_true(:);
+        normH=norm(h_true)^2;
+
+        %% ============ MO-GWO INIT ============
+        dim=M*L+N*K;
+        X=-pi+2*pi*rand(SearchAgents,dim);
+
+        alpha=zeros(1,dim); beta=alpha; delta=alpha;
+        f_alpha=[inf inf]; f_beta=f_alpha; f_delta=f_alpha;
+
+        %% ============ ITER ============
+        for t=1:MaxIter
+            a=2-2*t/MaxIter;
+
+            for i=1:SearchAgents
+                [nmse,cap]=fitness_SIM(X(i,:),M,L,N,K,...
+                    W_T,W_T_1,U_R,U_R_1,G,H_true,normH,Pt,Sigma2,S);
+
+                f=[nmse,-cap];   % MO
+
+                if dominates(f,f_alpha)
+                    f_delta=f_beta; delta=beta;
+                    f_beta=f_alpha; beta=alpha;
+                    f_alpha=f; alpha=X(i,:);
+                elseif dominates(f,f_beta)
+                    f_delta=f_beta; delta=beta;
+                    f_beta=f; beta=X(i,:);
+                elseif dominates(f,f_delta)
+                    f_delta=f; delta=X(i,:);
+                end
+            end
+
+            % Update wolves
+            for i=1:SearchAgents
+                for j=1:dim
+                    A1=2*a*rand-a; C1=2*rand;
+                    A2=2*a*rand-a; C2=2*rand;
+                    A3=2*a*rand-a; C3=2*rand;
+
+                    X1=alpha(j)-A1*abs(C1*alpha(j)-X(i,j));
+                    X2=beta(j)-A2*abs(C2*beta(j)-X(i,j));
+                    X3=delta(j)-A3*abs(C3*delta(j)-X(i,j));
+
+                    X(i,j)=(X1+X2+X3)/3;
+                end
+            end
+            X=max(min(X,pi),-pi);
+        end
+
+        [nmse,cap]=fitness_SIM(alpha,M,L,N,K,...
+            W_T,W_T_1,U_R,U_R_1,G,H_true,normH,Pt,Sigma2,S);
+
+        NMSE_mc(mc)=nmse;
+        Cap_mc(mc)=cap;
+    end
+
+    NMSE_L(idxL)=mean(NMSE_mc);
+    Cap_L(idxL)=mean(Cap_mc);
+end
+
+%% ================= PLOTS =================
+figure;
+plot(L_list,Cap_L,'o-','LineWidth',2);
+xlabel('Number of TX-SIM layers');
+ylabel('Capacity (bps/Hz)');
+grid on;
+
+figure;
+plot(L_list,NMSE_L,'o-','LineWidth',2);
+xlabel('Number of TX-SIM layers');
+ylabel('NMSE');
+grid on;
+
+disp('=== DONE ===')
+disp([L_list.' Cap_L NMSE_L])
+
+%% ================= FUNCTIONS =================
+function [nmse,cap]=fitness_SIM(x,M,L,N,K,W_T,W_T_1,U_R,U_R_1,G,H_true,normH,Pt,Sigma2,S)
+
+theta_T=reshape(x(1:M*L),M,L);
+theta_R=reshape(x(M*L+1:end),N,K);
+
+P=diag(exp(1i*theta_T(:,1)))*W_T_1;
+for l=1:L-1
+    P=diag(exp(1i*theta_T(:,l+1)))*W_T*P;
+end
+
+Q=U_R_1*diag(exp(1i*theta_R(:,1)));
+for k=1:K-1
+    Q=Q*U_R*diag(exp(1i*theta_R(:,k+1)));
+end
+
+H=Q*G*P;
+v=H(:);
+alpha=(v'*v)\(v'*H_true(:));
+nmse=norm(alpha*v-H_true(:))^2/normH;
+
+e=svd(H).^2;
+PA=WF(Pt,Sigma2,e(1:S));
+cap=sum(log2(1+PA.*e(1:S)/Sigma2));
+end
+
+function d=dominates(a,b)
+d=all(a<=b)&&any(a<b);
+end
+
+function P=WF(Pt,s2,a)
+a=sort(a,'descend');
+n=length(a);
+for k=n:-1:1
+    mu=(Pt+sum(s2./a(1:k)))/k;
+    P=max(mu-s2./a,0);
+    if sum(P)<=Pt, break; end
+end
+end
