@@ -1,0 +1,1 @@
+Test_sim trong github bị lỗi trên matlab nên thay bằng file test_sim gốc ở bên ngoài (sửa lỗi vector v=X(:))

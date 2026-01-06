@@ -1,0 +1,394 @@
+clc;            % Xóa màn hình lệnh
+clearvars;      % Xóa tất cả biến trong workspace
+close all;      % Đóng tất cả cửa sổ hình vẽ
+
+%% Các tham số cơ bản
+Thickness = 0.05;          % Độ dày của TX-SIM và RX-SIM (m)
+Pt = 10^(20/10);           % Công suất phát (W)
+Sigma2 = 10^(-110/10);     % Công suất nhiễu trung bình tại máy thu
+c = 3*10^8;                % Tốc độ ánh sáng (m/s)
+f0 = 28*10^9;              % Tần số sóng mang (Hz)
+lambda = c/f0;             % Bước sóng (m)
+N_max = 10;                % Số meta-atom trên mỗi hàng (chia lưới)
+
+%% Suy hao đường truyền
+PL = -20*log10(4*pi/lambda)-35*log10(250); % Suy hao đường truyền (dB)
+pathloss = 10^(PL/10);                     % Suy hao đường truyền (dạng số thực)
+
+%% Kích thước metasurface
+M = 30;     % Số meta-atom trên mỗi lớp TX-SIM
+N = 30;     % Số meta-atom trên mỗi lớp RX-SIM
+d_element_spacing = lambda/2; % Khoảng cách giữa các phần tử
+S = 4;      % Số luồng dữ liệu (streams)
+
+%% Tham số mô phỏng
+MonteCarlo = 10;   % Số lần thử nghiệm độc lập (để lấy trung bình)
+Max_L = 10;        % Số lớp tối đa của TX-SIM
+K = 10;            % Số lớp của RX-SIM
+
+%% Khởi tạo mảng lưu kết quả
+NMSE = zeros(MonteCarlo,1);          % Sai số NMSE cho từng lần thử
+Capacity = zeros(MonteCarlo,1);      % Dung lượng kênh cho từng lần thử
+NMSE_average = zeros(Max_L,1);       % Trung bình NMSE theo số lớp
+Capacity_average = zeros(Max_L,1);   % Trung bình dung lượng theo số lớp
+
+%% Vòng lặp qua số lớp TX-SIM
+for ii = 1:Max_L
+    L = ii; % Số lớp TX-SIM hiện tại
+    tic     % Bắt đầu đo thời gian
+    
+    %% Khởi tạo ma trận cho tính toán
+    Derivative_transmit_phase_shift = zeros(M,L); % Đạo hàm pha TX-SIM
+    Derivative_receive_phase_shift = zeros(N,K); % Đạo hàm pha RX-SIM
+    W_T = zeros(M,M);       % Ma trận truyền giữa các lớp TX-SIM
+    Corr_T = zeros(M,M);    % Ma trận tương quan kênh TX-SIM
+    U_R = zeros(N,N);       % Ma trận truyền giữa các lớp RX-SIM
+    Corr_R = zeros(N,N);    % Ma trận tương quan kênh RX-SIM
+    C_single_stream = zeros(S,1); % Dung lượng cho từng luồng dữ liệu
+    
+    Num_initialization = (max(L,K)*10); % Số lần khởi tạo ngẫu nhiên
+    Error_old_set = zeros(Num_initialization,1); % Lưu sai số cho từng khởi tạo
+    phase_transmit_set = zeros(M,L,Num_initialization); % Lưu pha TX-SIM
+    phase_receive_set = zeros(N,K,Num_initialization); % Lưu pha RX-SIM
+    
+    d_layer_spacing_transmit = Thickness/L; % Khoảng cách giữa các lớp TX-SIM
+    d_layer_spacing_receive = Thickness/K; % Khoảng cách giữa các lớp RX-SIM
+    
+    W_T_1 = zeros(M,S); % Kênh từ máy phát đến lớp đầu tiên TX-SIM
+    U_R_1 = zeros(S,N); % Kênh từ lớp cuối RX-SIM đến máy thu
+    Temp1 = zeros(S,1); % Biến tạm cho TX-SIM
+    Temp2 = zeros(S,1); % Biến tạm cho RX-SIM
+    
+    %% Tính ma trận truyền và tương quan cho TX-SIM
+    for mm1 = 1:M
+        m_z = ceil(mm1/N_max); % Vị trí theo trục z
+        m_x = mod(mm1-1,N_max)+1; % Vị trí theo trục x
+        for mm2 = 1:M
+            n_z = ceil(mm2/N_max);
+            n_x = mod(mm2-1,N_max)+1;
+            d_temp  = sqrt((m_x-n_x)^2 + (m_z-n_z)^2)*d_element_spacing; % Khoảng cách ngang
+            d_temp2 = sqrt(d_layer_spacing_transmit^2 + d_temp^2);       % Khoảng cách 3D
+            W_T(mm2,mm1) = lambda/4/pi/d_temp2*exp(-1i*2*pi*d_temp2/lambda); % Hệ số truyền
+            Corr_T(mm2,mm1) = sinc(2*d_temp/lambda); % Tương quan kênh
+        end
+    end
+    
+    %% Tính ma trận truyền và tương quan cho RX-SIM
+    for nn1 = 1:N
+        m_z = ceil(nn1/N_max);
+        m_x = mod(nn1-1,N_max)+1;
+        for nn2 = 1:N
+            n_z = ceil(nn2/N_max);
+            n_x = mod(nn2-1,N_max)+1;
+            d_temp  = sqrt((m_x-n_x)^2 + (m_z-n_z)^2)*d_element_spacing;
+            d_temp2 = sqrt(d_layer_spacing_receive^2 + d_temp^2);
+            U_R(nn2,nn1) = lambda/4/pi/d_temp2*exp(-1i*2*pi*d_temp2/lambda);
+            Corr_R(nn2,nn1) = sinc(2*d_temp/lambda);
+        end
+    end
+    
+    %% Tính kênh từ máy phát đến lớp đầu tiên TX-SIM
+    for mm = 1:M
+        m_z = ceil(mm/N_max);
+        m_x = mod(mm-1,N_max)+1;
+        for nn = 1:S
+            d_transmit = sqrt(d_layer_spacing_transmit^2 + ...
+                ((m_x-(1+N_max)/2)*d_element_spacing)^2 + ...
+                ((m_z-(1+N_max)/2)*d_element_spacing - (nn-(1+S)/2)*lambda/2)^2);
+            W_T_1(mm,nn) = lambda/4/pi/d_transmit*exp(-1i*2*pi*d_transmit/lambda);
+        end
+    end
+    
+    %% Tính kênh từ lớp cuối RX-SIM đến máy thu
+    for mm = 1:N
+        m_z = ceil(mm/N_max);
+        m_x = mod(mm-1,N_max)+1;
+        for nn = 1:S
+            d_receive = sqrt(d_layer_spacing_receive^2 + ...
+                ((m_x-(1+N_max)/2)*d_element_spacing)^2 + ...
+                ((m_z-(1+N_max)/2)*d_element_spacing - (nn-(1+S)/2)*lambda/2)^2);
+            U_R_1(nn,mm) = lambda/4/pi/d_receive*exp(-1i*2*pi*d_receive/lambda);
+        end
+    end
+rng(1)
+    for jj = 1:MonteCarlo
+    % Vòng lặp Monte Carlo: chạy thử nhiều lần để lấy trung bình (giảm ngẫu nhiên)
+    % Mỗi lần lặp sẽ sinh một kênh G ngẫu nhiên và tối ưu pha tương ứng
+
+    G_independent = sqrt(1/2)*(randn(N,M)+1i*randn(N,M));
+    % Sinh ma trận kênh Rayleigh độc lập (phần thực & ảo ~ N(0,1)), chuẩn hóa năng lượng
+    % Kích thước N x M: từ TX-SIM (M phần tử) đến RX-SIM (N phần tử)
+
+    G = sqrt(pathloss)*(Corr_R)^(1/2)*G_independent*(Corr_T)^(1/2); %% HMIMO channel
+    % Áp tương quan kênh ở phía RX (Corr_R) và TX (Corr_T) bằng căn ma trận (dạng "whitening" ngược)
+    % Đồng thời nhân hệ số suy hao đường truyền pathloss
+    % Kết quả G là kênh HMIMO có tương quan không gian thực tế
+
+    [G_left, G_svd, G_right] = svd(G); %% SVD of HMIMO channel
+    % Phân rã SVD: G = G_left * G_svd * G_right'
+    % G_svd chứa singular values (cấu trúc năng lượng kênh)
+
+    H_true = G_svd(1:S,1:S); %% Target channel
+    % Trích xuất kênh "mục tiêu" kích thước S x S (tương ứng S luồng dữ liệu)
+    % Ý tưởng: muốn kênh hiệu dụng sau SIM gần với khối diagonal mạnh nhất
+
+    H_true_vec = vec(H_true);
+    % Chuyển H_true thành vector cột (gom tất cả phần tử vào một vector)
+
+    Norm_H = norm(H_true_vec)^2; %% Norm of the target end-to-end channel
+    % Chuẩn hóa để tính NMSE (sai số bình phương tương đối so với chuẩn kênh mục tiêu)
+
+    h_diag = diag(H_true);
+    % Lấy các phần tử đường chéo (đại diện cho các kênh riêng mạnh), dùng cho water-filling
+
+    %% Power allocation using water-filling algorithm
+    if S == 1
+        PA_WF = Pt;
+        % Nếu chỉ 1 luồng dữ liệu thì dồn toàn bộ công suất phát Pt cho luồng đó
+    else
+        [ PA_WF ] = WF( Pt, Sigma2, h_diag );
+        % Nếu có nhiều luồng: phân bổ công suất tối ưu theo thuật toán "đổ nước" (water-filling)
+        % Dựa trên độ mạnh kênh (h_diag) và nhiễu Sigma2
+    end
+
+    %% Random initialization
+    for tt = 1:Num_initialization
+        % Khởi tạo ngẫu nhiên nhiều lần để tránh rơi vào cực trị cục bộ, chọn cấu hình tốt nhất
+
+        phase_transmit = randn(M,L)+1i*randn(M,L);
+        phase_transmit = phase_transmit./abs(phase_transmit); %% TX-SIM phase shifts
+        % Khởi tạo pha cho TX-SIM: số phức đơn vị (biên độ 1, chỉ thay đổi góc pha)
+        % Ma trận M x L: mỗi lớp có M phần tử, mỗi phần tử có một pha
+
+        phase_receive = randn(N,K)+1i*randn(N,K);
+        phase_receive = phase_receive./abs(phase_receive); %% RX-SIM phase shifts
+        % Tương tự, khởi tạo pha cho RX-SIM: ma trận N x K
+
+        %% Calculate TX-SIM response
+        P = diag(phase_transmit(:,1))*W_T_1;
+        % Đáp ứng của lớp đầu tiên TX-SIM: nhân pha lớp 1 và kênh từ TX đến lớp đầu (W_T_1)
+
+        for l=1:L-1
+            P = diag(phase_transmit(:,l+1))*W_T*P;
+            % Lan truyền qua các lớp tiếp theo: nhân pha lớp l+1, rồi qua ma trận truyền giữa lớp (W_T)
+            % P giữ vai trò "ma trận hiệu dụng" từ TX đến đầu ra TX-SIM
+        end
+
+        %% Calculate RX-SIM response
+        Q = U_R_1*diag(phase_receive(:,1));
+        % Đáp ứng từ RX-SIM đến máy thu: bắt đầu từ lớp cuối đến RX (U_R_1) nhân pha lớp 1 (ở phía RX)
+
+        for k = 1:K-1
+            Q = Q*U_R*diag(phase_receive(:,k+1));
+            % Lan truyền qua các lớp RX-SIM: nhân ma trận truyền giữa lớp (U_R) và pha lớp tiếp theo
+            % Q là "ma trận hiệu dụng" từ đầu vào RX-SIM đến máy thu
+        end
+
+        H_SIM = Q*G*P; %% Practical SIM-aided end-to-end channel
+        % Kênh đầu-cuối khi có SIM: TX -> TX-SIM (P) -> kênh G -> RX-SIM (Q) -> RX
+
+        H_SIM_vec = vec(H_SIM);
+        % Chuyển ma trận kênh hiệu dụng thành vector để tính toán tối ưu dễ hơn
+
+        Factor = (H_SIM_vec'*H_SIM_vec)\H_SIM_vec'*H_true_vec; %% Compensation factor
+        % Hệ số bù (Factor): tìm hệ số vô hướng tối ưu sao cho H_SIM gần H_true nhất theo LS
+        % Tránh sai khác do độ lợi toàn cục, tập trung tối ưu "hình dạng" kênh
+
+        Error_old_set(tt) = norm(Factor*H_SIM_vec-H_true_vec)^2/Norm_H; %% Error
+        % Sai số chuẩn hóa (NMSE) cho khởi tạo tt: càng nhỏ càng tốt
+
+        phase_transmit_set(:,:,tt) = phase_transmit;
+        phase_receive_set(:,:,tt) = phase_receive;
+        % Lưu cấu hình pha tương ứng để sau này chọn cái tốt nhất
+    end
+
+    [~,d_max] = min(Error_old_set); %% Select the best one from the random codebook
+    % Chọn cấu hình khởi tạo (tt) có sai số nhỏ nhất
+
+    Error_old = Error_old_set(d_max);
+    % Lấy sai số tương ứng với khởi tạo tốt nhất làm mốc ban đầu
+
+    phase_transmit = phase_transmit_set(:,:,d_max);
+    phase_phase_transmit = angle(phase_transmit);
+    % Lấy pha TX-SIM tốt nhất và chuyển về góc pha (rad) để dễ cập nhật bằng gradient
+
+    phase_receive = phase_receive_set(:,:,d_max);
+    phase_phase_receive = angle(phase_receive);
+    % Tương tự cho RX-SIM
+
+    %% Calculate TX-SIM response
+    P = diag(phase_transmit(:,1))*W_T_1;
+    for l=1:L-1
+        P = diag(phase_transmit(:,l+1))*W_T*P;
+    end
+    % Tính lại P với cấu hình pha đã chọn (điểm khởi tạo tốt nhất)
+
+    %% Calculate RX-SIM response
+    Q = U_R_1*diag(phase_receive(:,1));
+    for k = 1:K-1
+        Q = Q*U_R*diag(phase_receive(:,k+1));
+    end
+    % Tính lại Q tương ứng
+
+    H_SIM = Q*G*P; %% The end-to-end channel including TX-SIM and RX-SIM
+    % Kênh hiệu dụng hiện tại (điểm khởi tạo tối ưu)
+
+    H_SIM_vec = vec(H_SIM);
+    Factor = (H_SIM_vec'*H_SIM_vec)\H_SIM_vec'*H_true_vec; %% Compensation factor
+    % Tính lại hệ số bù với kênh hiện tại
+
+    step = 0.1; %% learning rate
+    % Tốc độ học (bước cập nhật gradient). Bước lớn giúp đi nhanh nhưng dễ dao động; bước nhỏ thì ổn định hơn
+
+    Error_new = 10000; %% A preset value as large as possible
+    % Khởi tạo sai số mới rất lớn để vào vòng lặp hội tụ
+
+    while abs(Error_new-Error_old) >= Error_old * 0.001
+        % Điều kiện dừng: khi mức giảm sai số tương đối < 0.1% (nghĩa là đã hội tụ khá tốt)
+        % Nếu muốn nhanh hơn, có thể nới thành 0.01 (1%)
+
+        %% Calculate partial derivative values associated with TX-SIM phase shifts Eq. (23)
+        for ll = 1:L
+            % Duyệt từng lớp TX-SIM
+            for mm = 1:M
+                % Duyệt từng phần tử trong lớp (meta-atom)
+                X_left = W_T_1;
+                for ll_left = 1:ll-1
+                    X_left = W_T*diag(phase_transmit(:,ll_left))*X_left;
+                end
+                % X_left: lan truyền từ phát đến trước phần tử (mm,ll)
+
+                X_right = Q*G;
+                for ll_right = 1:(L-ll)
+                    X_right = X_right*diag(phase_transmit(:,L+1-ll_right))*W_T;
+                end
+                % X_right: lan truyền từ sau phần tử (mm,ll) ra ngoài TX-SIM và qua kênh G, RX-SIM (Q)
+
+                for ss1 = 1:S
+                    % Tính đóng góp đến mỗi luồng dữ liệu
+                    temp1 = X_right(:,mm)*X_left(mm,ss1);
+                    % Thành phần nhạy cảm của H theo pha phần tử (mm,ll)
+                    % Ý tưởng: đạo hàm theo pha ảnh hưởng đến đường truyền ss1
+
+                    Temp1(ss1) = 2*imag((Factor*phase_transmit(mm,ll)*temp1)'*(Factor*H_SIM(:,ss1)-H_true(:,ss1)));
+                    % Công thức đạo hàm (theo pha) của hàm mất mát, lấy phần ảo để ra gradient pha
+                end
+                Derivative_transmit_phase_shift(mm,ll) = sum(Temp1);
+                % Tổng hợp gradient trên các luồng dữ liệu cho phần tử (mm,ll)
+            end
+        end
+
+        %% Calculate partial derivative values associated with RX-SIM phase shifts Eq. (24)
+        for kk = 1:K
+            % Duyệt từng lớp RX-SIM
+            for nn = 1:N
+                % Duyệt từng phần tử trong lớp
+                Y_left = U_R_1;
+                for kk_left = 1:kk-1
+                    Y_left = Y_left*diag(phase_receive(:,kk_left))*U_R;
+                end
+                % Y_left: lan truyền từ trước phần tử (nn,kk) đến máy thu
+
+                Y_right = G*P;
+                for kk_right = 1:(K-kk)
+                    Y_right = U_R*diag(phase_receive(:,K+1-kk_right))*Y_right;
+                end
+                % Y_right: lan truyền từ phát qua TX-SIM (P) và qua các lớp RX-SIM sau phần tử (nn,kk)
+
+                for ss1 = 1:S
+                    Y = Y_left(ss1,nn)*Y_right(nn,:);
+                    % Thành phần nhạy cảm của H theo pha phần tử (nn,kk) đối với luồng ss1
+
+                    Temp2(ss1) = 2*imag((Factor*H_SIM(ss1,:)-H_true(ss1,:))*(Factor*phase_receive(nn,kk)*Y)');
+                    % Gradient pha phía RX: dựa trên chênh lệch giữa H_SIM và H_true trên hàng ss1
+                end
+                Derivative_receive_phase_shift(nn,kk) = sum(Temp2);
+                % Tổng hợp gradient trên các luồng dữ liệu cho phần tử (nn,kk)
+            end
+        end
+
+        Derivative_transmit_phase_shift = pi*Derivative_transmit_phase_shift/max(max(Derivative_transmit_phase_shift)); %% Eq. (27)
+        % Chuẩn hóa gradient TX: co dãn để biên nằm trong khoảng [-pi, pi], tránh bước cập nhật quá lớn
+
+        phase_phase_transmit = phase_phase_transmit-step*Derivative_transmit_phase_shift; %% Update phase shifts of TX-SIM
+        % Cập nhật góc pha TX theo hướng giảm sai số (gradient descent)
+
+        phase_transmit = exp(1i*phase_phase_transmit);
+        % Chuyển góc pha thành số phức đơn vị (e^{j*pha})
+
+        Derivative_receive_phase_shift = pi*Derivative_receive_phase_shift/max(max(Derivative_receive_phase_shift)); %% Eq. (28)
+        % Chuẩn hóa gradient RX
+
+        phase_phase_receive = phase_phase_receive-step*Derivative_receive_phase_shift; %% Update phase shifts of RX-SIM
+        % Cập nhật góc pha RX
+
+        phase_receive = exp(1i*phase_phase_receive);
+        % Chuyển về dạng số phức đơn vị
+
+        step = step*0.5; %% Update learning rate
+        % Giảm tốc độ học sau mỗi vòng (giúp hội tụ ổn định hơn, tránh rung lắc)
+
+        %% Calculate TX-SIM response
+        P = diag(phase_transmit(:,1))*W_T_1;
+        for l=1:L-1
+            P = diag(phase_transmit(:,l+1))*W_T*P;
+        end
+        % Tính lại P sau khi cập nhật pha
+
+        %% Calculate RX-SIM response
+        Q = U_R_1*diag(phase_receive(:,1));
+        for k = 1:K-1
+            Q = Q*U_R*diag(phase_receive(:,k+1));
+        end
+        % Tính lại Q sau khi cập nhật pha
+
+        H_SIM = Q*G*P; %% The end-to-end channel including TX-SIM and RX-SIM
+        % Kênh đầu-cuối mới với pha đã cập nhật
+
+        H_SIM_vec = vec(H_SIM);
+        Factor = (H_SIM_vec'*H_SIM_vec)\H_SIM_vec'*H_true_vec; %% Compensation factor
+        % Tính lại hệ số bù để so sánh công bằng với H_true
+
+        Error_old = Error_new;
+        Error_new = norm(Factor*H_SIM-H_true)^2/Norm_H; %% Update residual error
+        % Cập nhật sai số: dùng NMSE giữa H_SIM (đã bù) và H_true
+    end
+
+    NMSE(jj) = Error_new;
+    % Lưu NMSE của lần Monte Carlo này (sau khi hội tụ)
+
+    for pp = 1:S
+        C_single_stream(pp) = log2(1+PA_WF(pp)*abs(Factor*H_SIM(pp,pp))^2/ ...
+            (Sigma2+(abs(Factor*H_SIM(pp,:)).^2*PA_WF-PA_WF(pp)*abs(Factor*H_SIM(pp,pp))^2)));
+        % Dung lượng từng luồng: log2(1 + SINR)
+        % Tử số: công suất trên kênh pp (đã bù Factor)
+        % Mẫu số: nhiễu + nhiễu xuyên kênh từ các luồng khác (trừ đi phần tự kênh pp để không đếm lặp)
+    end
+
+    Capacity(jj) = sum(C_single_stream); %% Capacity under the current setups
+    % Tổng dung lượng của S luồng trong lần Monte Carlo này
+end
+
+NMSE_average(ii) = mean(NMSE); %% Calculate NMSE
+% Trung bình NMSE qua tất cả lần Monte Carlo cho cấu hình L hiện tại
+
+Capacity_average(ii) = mean(Capacity); %% Ergodic capacity
+% Trung bình dung lượng (ergodic capacity) qua các lần Monte Carlo cho L hiện tại
+toc
+end
+%% Vẽ kết quả
+figure
+imagesc(abs(Q*G*P)) % Hiển thị ma trận kênh cuối cùng (có thể lỗi nếu Q,G,P chưa tồn tại ngoài vòng lặp)
+figure
+plot(NMSE_average) % Vẽ sai số NMSE theo số lớp TX-SIM
+NMSE_K_10 = NMSE_average;
+save NMSE_K_10 NMSE_K_10
+figure;
+plot(Capacity_average) % Vẽ dung lượng kênh theo số lớp TX-SIM
+Capacity_K_10 = Capacity_average;
+save Capacity_K_10 Capacity_K_10
+
+%% Hàm phụ: chuyển ma trận thành vector
+function v = vec(X)
+    v = X(:);
+end
