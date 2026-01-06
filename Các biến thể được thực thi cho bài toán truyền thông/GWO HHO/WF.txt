@@ -1,0 +1,19 @@
+function PA_WF = WF(P_total, sigma2, lambda)
+lambda = real(lambda(:));
+[lambda, idx] = sort(lambda,'descend');
+
+N = length(lambda);
+PA_WF = zeros(N,1);
+
+for k = 1:N
+    mu = (P_total + sum(sigma2 ./ lambda(1:k))) / k;
+    Pk = mu - sigma2 ./ lambda(1:k);
+    if all(Pk >= 0)
+        PA_WF(1:k) = Pk;
+    else
+        break
+    end
+end
+
+PA_WF(idx) = PA_WF;
+end

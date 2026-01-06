@@ -1,0 +1,22 @@
+function cost = fitness_SIM(x,M,L,N,K,W_T,W_T_1,U_R,U_R_1,G,H_true_vec,Norm_H)
+
+theta_T=reshape(x(1:M*L),M,L);
+theta_R=reshape(x(M*L+1:end),N,K);
+phase_T=exp(1i*theta_T);
+phase_R=exp(1i*theta_R);
+
+P=diag(phase_T(:,1))*W_T_1;
+for l=1:L-1
+    P=diag(phase_T(:,l+1))*W_T*P;
+end
+
+Q=U_R_1*diag(phase_R(:,1));
+for k=1:K-1
+    Q=Q*U_R*diag(phase_R(:,k+1));
+end
+
+H_SIM=Q*G*P;
+v=H_SIM(:);
+alpha=(v'*v)\(v'*H_true_vec);
+cost=norm(alpha*v-H_true_vec)^2/Norm_H;
+end

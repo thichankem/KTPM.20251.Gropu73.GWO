@@ -1,0 +1,190 @@
+clc;
+clearvars;
+close all;
+
+%% ================== BASIC PARAMETERS ==================
+Thickness = 0.05;
+Pt = 10^(20/10);                 % Total TX power
+Sigma2 = 10^(-110/10);           % Noise power
+c = 3e8;
+f0 = 28e9;
+lambda = c/f0;
+N_max = 10;
+
+%% Path loss
+PL = -20*log10(4*pi/lambda) - 35*log10(250);
+pathloss = 10^(PL/10);
+
+%% SIM parameters
+M = 30; N = 30;
+d_element_spacing = lambda/2;
+S = 4;                            % Data streams
+
+MonteCarlo = 10;
+Max_L = 10;
+K = 10;
+
+NMSE_average = zeros(Max_L,1);
+Capacity_average = zeros(Max_L,1);
+
+%% ================== MAIN LOOP ==================
+for ii = 1:Max_L
+    L = ii;
+    tic
+
+    %% Layer spacing
+    d_layer_spacing_transmit = Thickness/L;
+    d_layer_spacing_receive  = Thickness/K;
+
+    %% Channel matrices
+    W_T = zeros(M,M);
+    Corr_T = zeros(M,M);
+    U_R = zeros(N,N);
+    Corr_R = zeros(N,N);
+
+    %% TX-SIM internal propagation
+    for m1=1:M
+        mz = ceil(m1/N_max); mx = mod(m1-1,N_max)+1;
+        for m2=1:M
+            nz = ceil(m2/N_max); nx = mod(m2-1,N_max)+1;
+            dxy = sqrt((mx-nx)^2+(mz-nz)^2)*d_element_spacing;
+            d3 = sqrt(d_layer_spacing_transmit^2+dxy^2);
+            W_T(m2,m1)=lambda/(4*pi*d3)*exp(-1i*2*pi*d3/lambda);
+            Corr_T(m2,m1)=sinc(2*dxy/lambda);
+        end
+    end
+
+    %% RX-SIM internal propagation
+    for n1=1:N
+        mz = ceil(n1/N_max); mx = mod(n1-1,N_max)+1;
+        for n2=1:N
+            nz = ceil(n2/N_max); nx = mod(n2-1,N_max)+1;
+            dxy = sqrt((mx-nx)^2+(mz-nz)^2)*d_element_spacing;
+            d3 = sqrt(d_layer_spacing_receive^2+dxy^2);
+            U_R(n2,n1)=lambda/(4*pi*d3)*exp(-1i*2*pi*d3/lambda);
+            Corr_R(n2,n1)=sinc(2*dxy/lambda);
+        end
+    end
+
+    %% TX → SIM
+    W_T_1 = zeros(M,S);
+    for m=1:M
+        mz=ceil(m/N_max); mx=mod(m-1,N_max)+1;
+        for s=1:S
+            d = sqrt(d_layer_spacing_transmit^2 + ...
+                ((mx-(1+N_max)/2)*d_element_spacing)^2 + ...
+                ((mz-(1+N_max)/2)*d_element_spacing-(s-(1+S)/2)*lambda/2)^2);
+            W_T_1(m,s)=lambda/(4*pi*d)*exp(-1i*2*pi*d/lambda);
+        end
+    end
+
+    %% SIM → RX
+    U_R_1 = zeros(S,N);
+    for n=1:N
+        mz=ceil(n/N_max); mx=mod(n-1,N_max)+1;
+        for s=1:S
+            d = sqrt(d_layer_spacing_receive^2 + ...
+                ((mx-(1+N_max)/2)*d_element_spacing)^2 + ...
+                ((mz-(1+N_max)/2)*d_element_spacing-(s-(1+S)/2)*lambda/2)^2);
+            U_R_1(s,n)=lambda/(4*pi*d)*exp(-1i*2*pi*d/lambda);
+        end
+    end
+
+    NMSE = zeros(MonteCarlo,1);
+    Capacity = zeros(MonteCarlo,1);
+
+    %% ================== MONTE CARLO ==================
+    for jj = 1:MonteCarlo
+
+        %% HMIMO channel
+        G_ind = (randn(N,M)+1i*randn(N,M))/sqrt(2);
+        G = sqrt(pathloss)*(Corr_R^(1/2))*G_ind*(Corr_T^(1/2));
+
+        [~,Svd,~]=svd(G);
+        H_true=Svd(1:S,1:S);
+        H_true_vec=H_true(:);
+        Norm_H=norm(H_true_vec)^2;
+
+        %% ================== HHO ==================
+        dim = M*L + N*K;
+        SearchAgents = 20;
+        MaxIter = 50;
+        lb = -pi; ub = pi;
+
+        X = lb + (ub-lb).*rand(SearchAgents,dim);
+        Rabbit_Location=zeros(1,dim);
+        Rabbit_Energy=inf;
+
+        for t=1:MaxIter
+            for i=1:SearchAgents
+                fit = fitness_SIM(X(i,:),M,L,N,K,...
+                    W_T,W_T_1,U_R,U_R_1,...
+                    G,H_true_vec,Norm_H);
+
+                if fit < Rabbit_Energy
+                    Rabbit_Energy=fit;
+                    Rabbit_Location=X(i,:);
+                end
+            end
+
+            E1=2*(1-t/MaxIter);
+            for i=1:SearchAgents
+                E0=2*rand-1;
+                Esc=E1*E0;
+                if abs(Esc)>=1
+                    rand_hawk=X(randi(SearchAgents),:);
+                    X(i,:)=rand_hawk-rand*abs(rand_hawk-2*rand*X(i,:));
+                else
+                    if rand>=0.5
+                        X(i,:)=Rabbit_Location-Esc*abs(Rabbit_Location-X(i,:));
+                    else
+                        X(i,:)=Rabbit_Location-Esc*abs(mean(X)-X(i,:));
+                    end
+                end
+            end
+        end
+
+        NMSE(jj)=Rabbit_Energy;
+
+        %% ===== REBUILD OPTIMAL H_SIM =====
+        x_opt = Rabbit_Location;
+
+        theta_T = reshape(x_opt(1:M*L),M,L);
+        theta_R = reshape(x_opt(M*L+1:end),N,K);
+
+        phase_T = exp(1i*theta_T);
+        phase_R = exp(1i*theta_R);
+
+        P = diag(phase_T(:,1))*W_T_1;
+        for l=1:L-1
+            P = diag(phase_T(:,l+1))*W_T*P;
+        end
+
+        Q = U_R_1*diag(phase_R(:,1));
+        for k=1:K-1
+            Q = Q*U_R*diag(phase_R(:,k+1));
+        end
+
+        H_SIM = Q*G*P;
+
+        %% ===== CAPACITY (WF) =====
+        [~,Se,~]=svd(H_SIM);
+        lambda_e = diag(Se).^2;
+        lambda_e = lambda_e(1:S);
+
+        PA_WF = WF(Pt,Sigma2,lambda_e);
+
+        Capacity(jj)=sum(log2(1+PA_WF.*lambda_e/Sigma2));
+    end
+
+    NMSE_average(ii)=mean(NMSE);
+    Capacity_average(ii)=mean(Capacity);
+    toc
+end
+
+%% ================== PLOTS ==================
+figure; plot(NMSE_average,'LineWidth',2);
+xlabel('Number of TX-SIM layers'); ylabel('NMSE'); grid on;
+
+figure; plot(Capacity_average,'LineWidth',2);
+xlabel('Number of TX-SIM layers'); ylabel('Capacity (bps/Hz)'); grid on;
